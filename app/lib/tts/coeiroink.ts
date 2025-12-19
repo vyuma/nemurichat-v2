@@ -12,11 +12,11 @@ export class Coeiroink implements TTS<Speaker> {
   constructor(options: { apiUrl?: string; speaker?: Speaker }) {
     this.client = createClient<paths>({
       baseUrl:
-        (options.apiUrl ?? process.env.COEIROINK_API_URL) ||
-        "http://127.0.0.1:50032",
+        (process.env.COEIROINK_API_URL),
     });
     this.speaker = options.speaker ?? undefined;
   }
+
 
   async speak(text: string, style: number = 0): Promise<Buffer> {
     // speakerが設定されているか確認
