@@ -1,6 +1,4 @@
-import React from "react";
 import Timer from "./timer";
-import BackIcon from "./icon/back";
 import NavigationButton from "./navigation_buttun";
 
 const VideoPlayer = () => {
@@ -25,7 +23,6 @@ const VideoPlayer = () => {
                 href="home"
                 label=""
                 variant="back"
-                icon={<BackIcon />}
                 className="absolute top-4 left-4 z-20"
             />
         </div>

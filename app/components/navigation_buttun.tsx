@@ -12,10 +12,9 @@ type NavigationButtonProps = {
   label: string;//文字
   variant: Variant;//種類
   className?: string;
-  icon: React.ReactNode;//アイコンはそれぞれのページで読み込ませる
 };
 
-const NavigationButton: React.FC<NavigationButtonProps> = ({ href, label, variant, className,icon }) => {
+const NavigationButton: React.FC<NavigationButtonProps> = ({ href, label, variant, className, }) => {
   const router = useRouter();
 
   const handleClick = () => {
@@ -60,24 +59,10 @@ const NavigationButton: React.FC<NavigationButtonProps> = ({ href, label, varian
   
   
 //backボタンの構造も変える。枠線なし
-  if (variant === 'back') {
-    return (
-      <button
-        onClick={handleClick}
-        className={`${getClassName()} ${className || ''}`}
-        style={{ padding: 0, border: 'none' }}
-      >
-       <span className="flex items-center justify-center">{icon}</span>
-        
-      </button>
-    );
-  }
-
   // 通常のボタン構造（ホーム画面の3つのボタンの共通部分のcss）
   return (
     <button onClick={handleClick} className={`${getClassName()} ${className || ''}`}
     style={{ backgroundColor: '#ffffff', border: '1px solid #F9BF8D' }}>
-       <span className="flex items-center justify-center">{icon}</span>
       {label}
     </button>
   );

@@ -4,8 +4,9 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import VRMChat from "./components/VRMChat";
 import { useSpeechRecognition } from "./lib/stt";
-import BackIcon from "./components/icon/back";
 import { useCoeiroink, type Speaker } from "./lib/tts/useCoeiroink";
+import { useChunkedTTS } from "./lib/tts/useChunkedTTS";
+import { TypewriterText } from "./components/TypewriterText";
 import {
   type VRMExpression,
   type VRMAnimation,
@@ -13,7 +14,6 @@ import {
   VRM_ANIMATIONS,
   EXPRESSION_LABELS,
   ANIMATION_LABELS,
-  detectExpressionFromText,
 } from "./lib/vrm/expressions";
 
 
@@ -28,6 +28,7 @@ export default function ChatPage() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [_goal, setGoal] = useState<string>("");
   const [isSpeaking, setIsSpeaking] = useState(false);
+  const [isThinking, setIsThinking] = useState(false);
   const [selectedSpeaker, setSelectedSpeaker] = useState<Speaker | null>(null);
   const [selectedStyleIndex, setSelectedStyleIndex] = useState(0);
   const [showSpeakerSelector, setShowSpeakerSelector] = useState(false);
@@ -37,6 +38,8 @@ export default function ChatPage() {
   const [currentAnimation, setCurrentAnimation] = useState<VRMAnimation>("idle");
   const [showExpressionSelector, setShowExpressionSelector] = useState(false);
   const [showAnimationSelector, setShowAnimationSelector] = useState(false);
+  // 現在再生中のメッセージインデックス（タイプライター表示用）
+  const [playingMessageIndex, setPlayingMessageIndex] = useState(-1);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const hasGreetedRef = useRef(false);
 
@@ -47,6 +50,28 @@ export default function ChatPage() {
     getSpeakers,
     synthesizeSpeech,
   } = useCoeiroink();
+
+  // チャンクTTSフック
+  const {
+    chunks: ttsChunks,
+    currentChunkIndex,
+    isLoading: isTTSLoading,
+    isPlaying: isTTSPlaying,
+    startSynthesis,
+    stop: stopTTS,
+    setOnChunkStart,
+    setOnChunkEnd,
+    setOnAllComplete,
+  } = useChunkedTTS({
+    speakerUuid: selectedSpeaker?.speaker_uuid ?? "",
+    styleId: selectedSpeaker?.styles[selectedStyleIndex]?.id ?? 0,
+    synthesizeSpeech,
+  });
+
+  // TTSチャンクからテキスト配列を取得
+  const displayChunks = ttsChunks.map(chunk => chunk.text);
+  // タイプライター再生中かどうか
+  const isTypewriterPlaying = isTTSPlaying && playingMessageIndex >= 0;
 
   const {
     isListening,
@@ -67,13 +92,29 @@ export default function ChatPage() {
   const lastTranscriptRef = useRef<string>("");
   const SILENCE_THRESHOLD_MS = 2500; // 3.5秒
 
-  // スピーカー一覧を取得
+  // MANAの「ねむねむ」スタイルを固定で使用
+  const MANA_SPEAKER_UUID = "292ea286-3d5f-f1cc-157c-66462a6a9d08";
+  const NEMUNEMU_STYLE_ID = 46;
+
+  // スピーカー一覧を取得し、MANAの「ねむねむ」スタイルを設定
   useEffect(() => {
     const loadSpeakers = async () => {
       setIsLoadingSpeakers(true);
       const speakerList = await getSpeakers();
       if (speakerList.length > 0) {
-        setSelectedSpeaker(speakerList[0]);
+        // MANAを探す
+        const mana = speakerList.find(s => s.speaker_uuid === MANA_SPEAKER_UUID);
+        if (mana) {
+          setSelectedSpeaker(mana);
+          // 「ねむねむ」スタイルのインデックスを探す
+          const nemunemuIndex = mana.styles.findIndex(style => style.id === NEMUNEMU_STYLE_ID);
+          if (nemunemuIndex >= 0) {
+            setSelectedStyleIndex(nemunemuIndex);
+          }
+        } else {
+          // MANAが見つからない場合は最初のスピーカーを使用
+          setSelectedSpeaker(speakerList[0]);
+        }
       }
       setIsLoadingSpeakers(false);
     };
@@ -81,7 +122,58 @@ export default function ChatPage() {
     loadSpeakers();
   }, [getSpeakers]);
 
+  // チャンクTTSのコールバック設定
+  useEffect(() => {
+    // チャンク開始時
+    setOnChunkStart((_index, _text) => {
+      setIsSpeaking(true);
+    });
+
+    // チャンク終了時
+    setOnChunkEnd((_index) => {
+      // 次のチャンクに進む（特に処理不要）
+    });
+
+    // 全チャンク完了時
+    setOnAllComplete(() => {
+      setIsSpeaking(false);
+      setPlayingMessageIndex(-1);
+      // 発話終了後に表情をneutralに戻す（少し遅延を入れる）
+      setTimeout(() => {
+        setCurrentExpression("neutral");
+        setCurrentAnimation("idle");
+      }, 2000);
+      // 発話終了後に自動でリスニングを開始
+      startListening();
+    });
+
+    // クリーンアップ
+    return () => {
+      setOnChunkStart(null);
+      setOnChunkEnd(null);
+      setOnAllComplete(null);
+    };
+  }, [setOnChunkStart, setOnChunkEnd, setOnAllComplete, startListening]);
+
+  // 新しいチャンクベースのspeakText
   const speakText = useCallback(
+    async (text: string, messageIndex: number) => {
+      if (!selectedSpeaker) {
+        console.error("Speaker not selected");
+        return;
+      }
+
+      // 再生中のメッセージインデックスを設定
+      setPlayingMessageIndex(messageIndex);
+
+      // チャンクTTS開始（チャンク分割はuseChunkedTTS内で行われる）
+      await startSynthesis(text);
+    },
+    [selectedSpeaker, startSynthesis]
+  );
+
+  // 旧speakText（挨拶用にシンプルなバージョンを残す）
+  const speakTextSimple = useCallback(
     async (text: string) => {
       if (!selectedSpeaker) {
         console.error("Speaker not selected");
@@ -91,7 +183,6 @@ export default function ChatPage() {
       setIsSpeaking(true);
 
       try {
-        // クライアントから直接COEIROINKを呼び出し
         const styleId = selectedSpeaker.styles[selectedStyleIndex]?.id ?? 0;
         const audioBlob = await synthesizeSpeech(
           text,
@@ -112,18 +203,15 @@ export default function ChatPage() {
           audioRef.current.onended = () => {
             setIsSpeaking(false);
             URL.revokeObjectURL(audioUrl);
-            // 発話終了後に表情をneutralに戻す（少し遅延を入れる）
             setTimeout(() => {
               setCurrentExpression("neutral");
             }, 2000);
-            // 発話終了後に自動でリスニングを開始
             startListening();
           };
           audioRef.current.onerror = () => {
             setIsSpeaking(false);
             URL.revokeObjectURL(audioUrl);
             setCurrentExpression("neutral");
-            // エラー時も自動でリスニングを開始
             startListening();
           };
           await audioRef.current.play();
@@ -158,9 +246,10 @@ export default function ChatPage() {
     setCurrentExpression("happy");
 
     setTimeout(() => {
-      speakText(greetingText);
+      // 挨拶はシンプルなTTSで再生
+      speakTextSimple(greetingText);
     }, 500);
-  }, [selectedSpeaker, speakText, hasUserInteracted]);
+  }, [selectedSpeaker, speakTextSimple, hasUserInteracted]);
 
   // 開始ボタンクリック時の処理
   const handleStart = useCallback(() => {
@@ -175,6 +264,10 @@ export default function ChatPage() {
     setMessages((prev) => [...prev, newUserMessage]);
     clearTranscript();
     stopListening();
+
+    // 考え中状態を開始
+    setIsThinking(true);
+    setCurrentAnimation("thinking");
 
     try {
       // 目標を取得
@@ -200,25 +293,39 @@ export default function ChatPage() {
 
       const data = await response.json();
       const responseText = data.content;
-      const expression = data.expression as VRMExpression || detectExpressionFromText(responseText);
 
-      // 表情を設定
+      // 感情情報を取得（LLMから返却）
+      const expression = (data.emotion?.expression as VRMExpression) || "neutral";
+      const animation = (data.animation as VRMAnimation) || "idle";
+
+      // 考え中状態を終了
+      setIsThinking(false);
+
+      // 表情とアニメーションを設定
       setCurrentExpression(expression);
+      setCurrentAnimation(animation);
 
+      // メッセージを追加
+      const newMessageIndex = messages.length + 1; // +1 for user message
       setMessages((prev) => [
         ...prev,
         { role: "assistant", content: responseText },
       ]);
-      speakText(responseText);
+
+      // チャンクTTSで発話開始
+      speakText(responseText, newMessageIndex);
     } catch (error) {
       console.error("Chat API Error:", error);
+      setIsThinking(false);
+
       // エラー時はフォールバックメッセージ
       const fallbackText = "う〜んよく聞き取れなかったな〜？";
+      const newMessageIndex = messages.length + 1;
       setMessages((prev) => [
         ...prev,
         { role: "assistant", content: fallbackText },
       ]);
-      speakText(fallbackText);
+      speakText(fallbackText, newMessageIndex);
     }
   }, [transcript, clearTranscript, stopListening, speakText, messages]);
 
@@ -296,6 +403,7 @@ export default function ChatPage() {
       <div className="absolute inset-0 z-0">
         <VRMChat
           isSpeaking={isSpeaking}
+          isThinking={isThinking}
           expression={currentExpression}
           animation={currentAnimation}
         />
@@ -315,13 +423,6 @@ export default function ChatPage() {
 
       <div className="relative z-10 flex flex-col h-full">
         <div className="p-4 flex items-center gap-2">
-          <button
-            onClick={handleBack}
-            className="p-2 bg-white/80 rounded-full shadow-lg hover:bg-white transition"
-          >
-            <BackIcon />
-          </button>
-
           {/* スピーカー選択ボタン */}
           <button
             onClick={() => setShowSpeakerSelector(!showSpeakerSelector)}
@@ -484,11 +585,10 @@ export default function ChatPage() {
                     setCurrentExpression(expr);
                     setShowExpressionSelector(false);
                   }}
-                  className={`p-2 rounded-lg text-sm transition ${
-                    currentExpression === expr
-                      ? "bg-amber-500 text-white"
-                      : "bg-gray-100 text-gray-700 hover:bg-gray-200"
-                  }`}
+                  className={`p-2 rounded-lg text-sm transition ${currentExpression === expr
+                    ? "bg-amber-500 text-white"
+                    : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+                    }`}
                 >
                   {EXPRESSION_LABELS[expr]}
                 </button>
@@ -515,11 +615,10 @@ export default function ChatPage() {
                     setCurrentAnimation(anim);
                     setShowAnimationSelector(false);
                   }}
-                  className={`p-2 rounded-lg text-sm transition ${
-                    currentAnimation === anim
-                      ? "bg-blue-500 text-white"
-                      : "bg-gray-100 text-gray-700 hover:bg-gray-200"
-                  }`}
+                  className={`p-2 rounded-lg text-sm transition ${currentAnimation === anim
+                    ? "bg-blue-500 text-white"
+                    : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+                    }`}
                 >
                   {ANIMATION_LABELS[anim]}
                 </button>
@@ -541,15 +640,35 @@ export default function ChatPage() {
             {messages.map((msg, index) => (
               <div
                 key={index}
-                className={`p-3 rounded-2xl max-w-[80%] ${
-                  msg.role === "assistant"
-                    ? "bg-amber-100/90 text-amber-900 self-start"
-                    : "bg-white/90 text-gray-800 self-end ml-auto"
-                }`}
+                className={`p-3 rounded-2xl max-w-[80%] ${msg.role === "assistant"
+                  ? "bg-amber-100/90 text-amber-900 self-start"
+                  : "bg-white/90 text-gray-800 self-end ml-auto"
+                  }`}
               >
-                {msg.content}
+                {/* タイプライター表示（再生中の最後のアシスタントメッセージのみ） */}
+                {msg.role === "assistant" &&
+                  index === playingMessageIndex &&
+                  isTypewriterPlaying ? (
+                  <TypewriterText
+                    chunks={displayChunks}
+                    currentChunkIndex={currentChunkIndex}
+                    isPlaying={isTypewriterPlaying}
+                    characterDelay={40}
+                  />
+                ) : (
+                  msg.content
+                )}
               </div>
             ))}
+            {/* 考え中インジケーター */}
+            {isThinking && (
+              <div className="p-3 rounded-2xl max-w-[80%] bg-amber-100/90 text-amber-900 self-start">
+                <span className="inline-flex items-center gap-1">
+                  <span className="animate-pulse">考え中</span>
+                  <span className="animate-bounce">...</span>
+                </span>
+              </div>
+            )}
           </div>
 
           {(transcript || interimTranscript) && (
@@ -562,13 +681,12 @@ export default function ChatPage() {
           <div className="flex items-center gap-3 bg-white/90 p-3 rounded-2xl shadow-lg">
             {/* リスニング状態のインジケーター */}
             <div
-              className={`p-3 rounded-full ${
-                isListening
-                  ? "bg-red-500 animate-pulse"
-                  : isSpeaking
-                    ? "bg-amber-500"
-                    : "bg-gray-300"
-              }`}
+              className={`p-3 rounded-full ${isListening
+                ? "bg-red-500 animate-pulse"
+                : isSpeaking
+                  ? "bg-amber-500"
+                  : "bg-gray-300"
+                }`}
             >
               <svg
                 xmlns="http://www.w3.org/2000/svg"
@@ -600,11 +718,10 @@ export default function ChatPage() {
             <button
               onClick={handleSend}
               disabled={!transcript.trim() || isSpeaking || !selectedSpeaker}
-              className={`p-3 rounded-full bg-amber-500 text-white transition ${
-                !transcript.trim() || isSpeaking || !selectedSpeaker
-                  ? "opacity-50 cursor-not-allowed"
-                  : "hover:bg-amber-600"
-              }`}
+              className={`p-3 rounded-full bg-amber-500 text-white transition ${!transcript.trim() || isSpeaking || !selectedSpeaker
+                ? "opacity-50 cursor-not-allowed"
+                : "hover:bg-amber-600"
+                }`}
             >
               <svg
                 xmlns="http://www.w3.org/2000/svg"

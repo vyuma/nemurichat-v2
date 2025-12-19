@@ -91,7 +91,7 @@ export default function TimerCompleteNotification({ isOpen, onClose, onChat }: P
     };
 
     loader.load(
-      "/models/nemuri.vrm",
+      "/models/alice.vrm",
       (gltf: any) => {
         const vrm = gltf.userData.vrm;
         vrmRef.current = vrm;

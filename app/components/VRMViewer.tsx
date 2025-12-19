@@ -7,7 +7,7 @@ import { VRMLoaderPlugin, VRM } from "@pixiv/three-vrm";
 
 export default function VRMViewer() {
   const containerRef = useRef<HTMLDivElement>(null);
-  const [vrmUrl, setVrmUrl] = useState("/model/nemuri.vrm");
+  const [vrmUrl, setVrmUrl] = useState("/models/alice.vrm");
   const vrmRef = useRef<VRM | null>(null);
 
   const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {

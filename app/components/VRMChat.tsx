@@ -12,32 +12,41 @@ import {
 
 type Props = {
   isSpeaking: boolean;
-  expression?: VRMExpression;
-  animation?: VRMAnimation;
+  isThinking?: boolean;
+  expression: VRMExpression;
+  animation: VRMAnimation;
 };
 
 export default function VRMChat({
   isSpeaking,
-  expression = "neutral",
-  animation = "idle",
+  isThinking = false,
+  expression,
+  animation,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const vrmRef = useRef<any>(null);
   const isSpeakingRef = useRef(isSpeaking);
+  const isThinkingRef = useRef(isThinking);
   const expressionRef = useRef<VRMExpression>(expression);
   const animationRef = useRef<VRMAnimation>(animation);
+  const targetExpressionRef = useRef<Record<string, number>>({});
+  const currentExpressionRef = useRef<Record<string, number>>({});
 
-  // isSpeakingの変更を追跡
+  // propsの変更を追跡
   useEffect(() => {
     isSpeakingRef.current = isSpeaking;
   }, [isSpeaking]);
 
-  // expressionの変更を追跡
+  useEffect(() => {
+    isThinkingRef.current = isThinking;
+  }, [isThinking]);
+
   useEffect(() => {
     expressionRef.current = expression;
+    // 目標表情を設定
+    targetExpressionRef.current = EXPRESSION_CONFIGS[expression] || {};
   }, [expression]);
 
-  // animationの変更を追跡
   useEffect(() => {
     animationRef.current = animation;
   }, [animation]);
@@ -90,8 +99,8 @@ export default function VRMChat({
       0.1,
       20.0
     );
-    camera.position.set(0, 1.0, 1.8);
-    camera.lookAt(0, 1.2, 0);
+    camera.position.set(0, 1.5, 1.8);
+    camera.lookAt(0, 1.5, 0);
 
     const handleResize = () => {
       const w = window.innerWidth;
@@ -106,11 +115,14 @@ export default function VRMChat({
     loader.register((parser) => new VRMLoaderPlugin(parser));
 
     let time = 0;
-    // アニメーション用の状態
-    let lookTargetY = 0;
-    let currentLookY = 0;
-    let sleepyBlinkValue = 0;
-    let nodPhase = 0;
+    const EXPRESSION_LERP_SPEED = 0.08; // 表情遷移速度
+    const MOUTH_EXPRESSIONS = ["aa", "ih", "ou", "ee", "oh"];
+    const EMOTION_EXPRESSIONS = ["happy", "angry", "sad", "relaxed", "surprised", "neutral"];
+
+    // 表情を滑らかに遷移させる
+    const lerpExpression = (current: number, target: number, speed: number): number => {
+      return current + (target - current) * speed;
+    };
 
     const animate = () => {
       requestAnimationFrame(animate);
@@ -118,190 +130,135 @@ export default function VRMChat({
 
       if (vrmRef.current) {
         const vrm = vrmRef.current;
-        const currentAnimation = animationRef.current;
+        const currentAnim = animationRef.current;
+        const isThinking = isThinkingRef.current;
 
-        // 上半身だけ揺らす（ベースアニメーション）
+        // アニメーションに応じた上半身の動き
         if (vrm.humanoid) {
           const spine = vrm.humanoid.getRawBoneNode("spine");
           const chest = vrm.humanoid.getRawBoneNode("chest");
           const head = vrm.humanoid.getRawBoneNode("head");
-          const neck = vrm.humanoid.getRawBoneNode("neck");
 
-          // ベースの揺れ
+          // 基本の揺れ
+          let spineSwayZ = Math.sin(time * 0.8) * 0.03;
+          let spineSwayX = Math.sin(time * 0.5) * 0.02;
+          let chestSwayZ = Math.sin(time * 0.8 + 0.5) * 0.02;
+          let headSwayZ = Math.sin(time * 1.2) * 0.02;
+          let headSwayX = Math.sin(time * 0.6) * 0.015;
+
+          // 考え中モーション
+          if (isThinking) {
+            headSwayZ = Math.sin(time * 0.5) * 0.08; // 首を傾ける
+            headSwayX = 0.08; // 少し上を見る
+          }
+
+          // アニメーション別の動き
+          switch (currentAnim) {
+            case "thinking":
+              headSwayZ = Math.sin(time * 0.5) * 0.08;
+              headSwayX = 0.08;
+              break;
+            case "nod":
+              // うなずき動作
+              headSwayX = Math.sin(time * 3) * 0.1;
+              break;
+            case "sleepy":
+              // ゆっくりとした動き
+              spineSwayZ = Math.sin(time * 0.3) * 0.05;
+              headSwayX = Math.sin(time * 0.2) * 0.08;
+              break;
+            case "lookAround":
+              // きょろきょろ
+              headSwayZ = Math.sin(time * 2) * 0.1;
+              break;
+            case "idle":
+            default:
+              // デフォルトの揺れ
+              break;
+          }
+
           if (spine) {
-            spine.rotation.z = Math.sin(time * 0.8) * 0.03;
-            spine.rotation.x = Math.sin(time * 0.5) * 0.02;
+            spine.rotation.z = spineSwayZ;
+            spine.rotation.x = spineSwayX;
           }
 
           if (chest) {
-            chest.rotation.z = Math.sin(time * 0.8 + 0.5) * 0.02;
+            chest.rotation.z = chestSwayZ;
           }
 
-          // アニメーションタイプに応じた動き
-          switch (currentAnimation) {
-            case "lookAround":
-              // きょろきょろ：ランダムに横を向く
-              if (Math.random() < 0.005) {
-                lookTargetY = (Math.random() - 0.5) * 0.6; // -0.3 ~ 0.3
-              }
-              currentLookY += (lookTargetY - currentLookY) * 0.02;
-              if (head) {
-                head.rotation.y = currentLookY;
-                head.rotation.z = Math.sin(time * 1.2) * 0.02;
-                head.rotation.x = Math.sin(time * 0.6) * 0.015;
-              }
-              if (neck) {
-                neck.rotation.y = currentLookY * 0.3;
-              }
-              break;
-
-            case "sleepy":
-              // 眠たげ：うつらうつら + 目を細める
-              if (head) {
-                // 頭がゆっくり前に傾く
-                head.rotation.x = 0.1 + Math.sin(time * 0.4) * 0.08;
-                head.rotation.z = Math.sin(time * 0.25) * 0.05;
-                // たまにカクッとなる
-                if (Math.random() < 0.002) {
-                  head.rotation.x = -0.1;
-                }
-              }
-              // 目を細める
-              sleepyBlinkValue = 0.5 + Math.sin(time * 0.5) * 0.3;
-              break;
-
-            case "thinking":
-              // 考え中：首をかしげる
-              if (head) {
-                head.rotation.z = 0.15 + Math.sin(time * 0.8) * 0.03;
-                head.rotation.x = -0.05 + Math.sin(time * 0.6) * 0.02;
-                head.rotation.y = Math.sin(time * 0.4) * 0.1;
-              }
-              break;
-
-            case "nod":
-              // うなずき
-              nodPhase += 0.08;
-              if (head) {
-                const nodValue = Math.sin(nodPhase) * 0.15;
-                head.rotation.x = nodValue > 0 ? nodValue : 0;
-                head.rotation.z = Math.sin(time * 1.2) * 0.01;
-              }
-              // 一定時間後にリセット
-              if (nodPhase > Math.PI * 4) {
-                nodPhase = 0;
-              }
-              break;
-
-            case "idle":
-            default:
-              // 通常待機
-              if (head) {
-                head.rotation.z = Math.sin(time * 1.2) * 0.02;
-                head.rotation.x = Math.sin(time * 0.6) * 0.015;
-                head.rotation.y = Math.sin(time * 0.4) * 0.02;
-              }
-              // lookTargetをリセット
-              lookTargetY = 0;
-              currentLookY += (0 - currentLookY) * 0.02;
-              sleepyBlinkValue = 0;
-              break;
+          if (head) {
+            head.rotation.z = headSwayZ;
+            head.rotation.x = headSwayX;
           }
         }
 
-        // 斜め約10度をベースに微小な揺れを追加
-        const baseRotationY = Math.PI + 0.17;
+        const baseRotationY = Math.PI;
         vrm.scene.rotation.y = baseRotationY + Math.sin(time * 0.9) * 0.03;
 
-        // 表情と口パクアニメーション
         if (vrm.expressionManager) {
-          // まず全ての表情をリセット
-          const allExpressions = ["happy", "angry", "sad", "relaxed", "surprised", "neutral"];
-          for (const expr of allExpressions) {
-            try {
-              vrm.expressionManager.setValue(expr, 0);
-            } catch {
-              // 表情が存在しない場合は無視
-            }
-          }
+          // 表情の適用（口パクと独立）
+          const targetExpression = targetExpressionRef.current;
 
-          // 現在の表情を適用
-          const currentExpression = expressionRef.current;
-          const expressionConfig = EXPRESSION_CONFIGS[currentExpression];
-          for (const [name, value] of Object.entries(expressionConfig)) {
+          // 感情表情を滑らかに遷移
+          for (const expr of EMOTION_EXPRESSIONS) {
+            const targetValue = targetExpression[expr] ?? 0;
+            const currentValue = currentExpressionRef.current[expr] ?? 0;
+            const newValue = lerpExpression(currentValue, targetValue, EXPRESSION_LERP_SPEED);
+            currentExpressionRef.current[expr] = newValue;
+
+            // VRMに設定（表情名がVRM側で対応している場合のみ）
             try {
-              vrm.expressionManager.setValue(name, value);
+              vrm.expressionManager.setValue(expr, newValue);
             } catch {
-              // 表情が存在しない場合は無視
+              // 対応していない表情は無視
             }
           }
 
           // 口パクアニメーション（話している時のみ）
           if (isSpeakingRef.current) {
-            // 話している時: あいうえおの口パク
             const speed = 4;
             const t = time * speed;
             const open = Math.abs(Math.sin(t));
 
-            vrm.expressionManager.setValue("aa", 0);
-            vrm.expressionManager.setValue("ih", 0);
-            vrm.expressionManager.setValue("ou", 0);
-            vrm.expressionManager.setValue("ee", 0);
-            vrm.expressionManager.setValue("oh", 0);
+            // 全ての口形をリセット
+            for (const vowel of MOUTH_EXPRESSIONS) {
+              vrm.expressionManager.setValue(vowel, 0);
+            }
 
             const vowelIndex = Math.floor(t) % 5;
-            switch (vowelIndex) {
-              case 0:
-                vrm.expressionManager.setValue("aa", open);
-                break;
-              case 1:
-                vrm.expressionManager.setValue("ih", open);
-                break;
-              case 2:
-                vrm.expressionManager.setValue("ou", open);
-                break;
-              case 3:
-                vrm.expressionManager.setValue("ee", open);
-                break;
-              case 4:
-                vrm.expressionManager.setValue("oh", open);
-                break;
-            }
+            vrm.expressionManager.setValue(MOUTH_EXPRESSIONS[vowelIndex], open);
           } else {
             // 話していない時: 口を閉じる
-            vrm.expressionManager.setValue("aa", 0);
-            vrm.expressionManager.setValue("ih", 0);
-            vrm.expressionManager.setValue("ou", 0);
-            vrm.expressionManager.setValue("ee", 0);
-            vrm.expressionManager.setValue("oh", 0);
+            for (const vowel of MOUTH_EXPRESSIONS) {
+              vrm.expressionManager.setValue(vowel, 0);
+            }
           }
 
           vrm.expressionManager.update();
-        }
 
-        // 眠たげアニメーション時の目を細める
-        if (vrm.expressionManager && currentAnimation === "sleepy") {
-          vrm.expressionManager.setValue("blinkLeft", sleepyBlinkValue);
-          vrm.expressionManager.setValue("blinkRight", sleepyBlinkValue);
-          vrm.expressionManager.update();
-        }
-        // 通常の瞬き（眠たげ以外の時）
-        else if (vrm.expressionManager && Math.random() < 0.003) {
-          const blink = async () => {
-            vrm.expressionManager.setValue("blinkLeft", 1.0);
-            vrm.expressionManager.setValue("blinkRight", 1.0);
-            vrm.expressionManager.update();
-
-            await new Promise((r) => setTimeout(r, 50));
-
-            for (let i = 1.0; i >= 0; i -= 0.1) {
-              vrm.expressionManager.setValue("blinkLeft", i);
-              vrm.expressionManager.setValue("blinkRight", i);
+          // 瞬き（考え中は半目）
+          if (isThinking) {
+            // 考え中は少し目を細める
+            vrm.expressionManager.setValue("blinkLeft", 0.3);
+            vrm.expressionManager.setValue("blinkRight", 0.3);
+          } else if (Math.random() < 0.003) {
+            // 通常の瞬き
+            const blink = async () => {
+              vrm.expressionManager.setValue("blinkLeft", 1.0);
+              vrm.expressionManager.setValue("blinkRight", 1.0);
               vrm.expressionManager.update();
-              await new Promise((r) => setTimeout(r, 5));
-            }
-          };
-          blink();
+
+              await new Promise((r) => setTimeout(r, 50));
+
+              for (let i = 1.0; i >= 0; i -= 0.1) {
+                vrm.expressionManager.setValue("blinkLeft", i);
+                vrm.expressionManager.setValue("blinkRight", i);
+                vrm.expressionManager.update();
+                await new Promise((r) => setTimeout(r, 5));
+              }
+            };
+            blink();
+          }
         }
       }
 
@@ -315,8 +272,7 @@ export default function VRMChat({
         vrmRef.current = vrm;
         scene.add(vrm.scene);
 
-        // 斜め約10度
-        vrm.scene.rotation.y = Math.PI + 0.17;
+        vrm.scene.rotation.y = Math.PI;
         vrm.scene.scale.set(1.2, 1.2, 1.2);
 
         const bbox = new THREE.Box3().setFromObject(vrm.scene);
